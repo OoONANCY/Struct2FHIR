@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project data (generated at runtime)
+loinc/data/loinc_corpus.json
+loinc/data/loinc_dict.json
+quarantine/data/quarantine.json
+
+# Secrets
+.env
+
+# Test / audit artifacts
+audit_*.json
