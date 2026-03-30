@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "fhir-gateway"
+version = "0.1.0"
+description = "Configurable gateway that converts lab CSV data into FHIR R4 Observation resources"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "rapidfuzz>=3.6.0",
+    "requests>=2.31.0",
+    "pyyaml>=6.0.1",
+    "aiohttp>=3.9.0",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8.0.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

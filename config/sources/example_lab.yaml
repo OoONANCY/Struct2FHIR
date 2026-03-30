@@ -1,0 +1,35 @@
+# Example source config — copy and edit for each new lab system.
+# See README.md for full reference.
+
+source_name: "example_lab"
+fhir_server_url: "https://your-fhir-server.com/fhir"
+fhir_auth_token: ""                            # or set FHIR_AUTH_TOKEN env var
+patient_id_system: "urn:oid:2.16.840.1.113883.3.example"
+
+# Maps internal standard names → actual CSV column headers
+column_map:
+  patient_id:      "PatientID"          # required
+  lab_name:        "TestName"           # required
+  value:           "Result"             # required
+  unit:            "Units"              # required
+  collected_at:    "CollectedDate"      # optional — omit if CSV has no date column
+  reference_range: "RefRange"           # optional
+
+date_formats:
+  - "%Y-%m-%d"
+  - "%d/%m/%Y"
+  - "%m/%d/%Y %H:%M"
+
+delimiter: ","
+encoding:  "utf-8"
+skip_rows: 0    # rows to skip before the header line
+
+transform_rules:
+  unit_map:
+    "MG/DL":  "mg/dL"
+    "mEq/L":  "meq/L"
+
+  custom_rules:
+    - field: lab_name
+      find:    "Na+"
+      replace: "Sodium"

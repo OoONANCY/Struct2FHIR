@@ -1,0 +1,43 @@
+# eICU Collaborative Research Database — lab.csv
+# Source: https://physionet.org/content/eicu-crd-demo/2.0/
+#
+# This CSV uses offset-based timestamps (minutes from ICU admission)
+# instead of real dates.  The pipeline will use a synthetic reference
+# date + offset to produce an effectiveDateTime.
+
+source_name: "eicu_lab"
+fhir_server_url: "https://your-fhir-server.com/fhir"
+fhir_auth_token: ""
+patient_id_system: "urn:oid:2.16.840.1.113883.3.eicu"
+
+column_map:
+  patient_id:      "patientunitstayid"
+  lab_name:        "labname"
+  value:           "labresult"
+  unit:            "labmeasurenamesystem"
+  # No date column — use offset_minutes instead
+  # collected_at is intentionally omitted
+
+delimiter: ","
+encoding:  "utf-8"
+skip_rows: 0
+
+# Offset-based time: minutes from a synthetic admission date
+# The pipeline will compute effectiveDateTime = reference_date + offset minutes
+offset_column: "labresultoffset"
+reference_date: "2024-01-01T00:00:00Z"
+
+transform_rules:
+  unit_map:
+    "K/mcL":  "10*3/uL"
+    "M/mcL":  "10*6/uL"
+    "mEq/L":  "meq/L"
+    "mg/dl":  "mg/dL"
+
+  custom_rules:
+    - field: lab_name
+      find:    "platelets x 1000"
+      replace: "Platelet count"
+    - field: lab_name
+      find:    "WBC x 1000"
+      replace: "Leukocytes"
