@@ -55,6 +55,15 @@ def validate_observation(obs: dict) -> list[str]:
     subject = obs.get("subject")
     if not subject:
         errors.append("Missing required field: subject")
+    else:
+        identifier = subject.get("identifier", {})
+        if not identifier.get("value"):
+            errors.append("subject.identifier.value is empty")
+
+    # Must have either valueQuantity or valueString
+    has_value = obs.get("valueQuantity") is not None or obs.get("valueString") is not None
+    if not has_value:
+        errors.append("Missing value: must have either valueQuantity or valueString")
 
     # effectiveDateTime format
     eff = obs.get("effectiveDateTime")
@@ -67,6 +76,8 @@ def validate_observation(obs: dict) -> list[str]:
         val = vq.get("value")
         if val is not None and not isinstance(val, (int, float)):
             errors.append(f"valueQuantity.value must be numeric, got {type(val).__name__}")
+        if not vq.get("system"):
+            errors.append("valueQuantity.system is missing (expected UCUM)")
 
     if errors:
         logger.warning("Validation failed with %d error(s): %s", len(errors), "; ".join(errors))

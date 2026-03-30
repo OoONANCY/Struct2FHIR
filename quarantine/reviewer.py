@@ -1,4 +1,4 @@
-"""Quarantine Reviewer — interactive CLI tool for reviewing quarantined records."""
+"""Quarantine Reviewer — interactive CLI tool with color-coded confidence."""
 
 import sys
 import logging
@@ -9,6 +9,26 @@ from loinc import api_client
 from quarantine.store import QuarantineStore
 
 logger = logging.getLogger(__name__)
+
+# ANSI color codes
+_RED = "\033[91m"
+_YELLOW = "\033[93m"
+_GREEN = "\033[92m"
+_CYAN = "\033[96m"
+_BOLD = "\033[1m"
+_RESET = "\033[0m"
+
+
+def _color_confidence(score: float) -> str:
+    """Return a color-coded confidence string."""
+    if score >= 95:
+        return f"{_GREEN}{score:.1f}%{_RESET}"
+    elif score >= 80:
+        return f"{_CYAN}{score:.1f}%{_RESET}"
+    elif score >= 60:
+        return f"{_YELLOW}{score:.1f}%{_RESET}"
+    else:
+        return f"{_RED}{score:.1f}%{_RESET}"
 
 
 def review_pending(store: QuarantineStore | None = None,
@@ -21,67 +41,86 @@ def review_pending(store: QuarantineStore | None = None,
 
     pending = store.get_pending()
     if not pending:
-        print("\n✅ No pending quarantine records to review.\n")
+        print(f"\n{_GREEN}✅ No pending quarantine records to review.{_RESET}\n")
         return
 
-    print(f"\n📋 {len(pending)} record(s) pending review\n")
+    # Show backlog stats
+    stats = store.stats()
+    print(f"\n{_BOLD}📋 Quarantine Backlog{_RESET}")
+    for status_name, count in sorted(stats.items()):
+        if status_name != "total":
+            print(f"   {status_name}: {count}")
+    print(f"   {_BOLD}total: {stats['total']}{_RESET}")
+    print(f"\n{_BOLD}{len(pending)} record(s) pending review{_RESET}")
     print("=" * 60)
 
     for record in pending:
         qid = record["id"]
         lab_name = record["lab_name"]
+        reason = record.get("reason", "unknown")
 
         store.update_status(qid, "in_review")
 
-        print(f"\n🔍 Record: {qid}")
-        print(f"   Lab name: {lab_name}")
+        print(f"\n{_BOLD}🔍 Record: {qid}{_RESET}")
+        print(f"   Lab name:  {_BOLD}{lab_name}{_RESET}")
+        print(f"   Reason:    {reason}")
 
         # Show existing candidates
         candidates = record.get("candidates", [])
         if not candidates:
-            # Try fresh fuzzy match
             candidates = fuzzy.match(lab_name)
 
         if candidates:
-            print("\n   Top candidates:")
+            print(f"\n   {_BOLD}Top candidates:{_RESET}")
             for i, c in enumerate(candidates, 1):
                 name = c.get("display_name", c.get("display", ""))
                 code = c.get("loinc_code", c.get("loinc", ""))
                 score = c.get("score", c.get("confidence", 0))
-                print(f"   {i}. {name} [{code}] — {score:.1f}%")
+                if isinstance(score, float) and score < 1.0:
+                    score *= 100
+                colored = _color_confidence(score)
+                print(f"   {i}. {name} [{code}] — {colored}")
+        else:
+            print(f"\n   {_YELLOW}No candidates available.{_RESET}")
 
-        print("\n   Actions:")
+        print(f"\n   {_BOLD}Actions:{_RESET}")
         print("   [1-N]  Accept candidate N")
         print("   [s]    Search with a different term")
         print("   [m]    Manually enter LOINC code")
+        print("   [e]    Escalate for expert review")
         print("   [u]    Mark as unmappable")
         print("   [q]    Quit review")
 
-        choice = input("\n   Choice: ").strip().lower()
+        choice = input(f"\n   {_BOLD}Choice:{_RESET} ").strip().lower()
 
         if choice == "q":
             store.update_status(qid, "pending_review")
-            print("\n⏸  Review paused.")
+            print(f"\n{_CYAN}⏸  Review paused.{_RESET}")
             break
 
         elif choice == "u":
             store.update_status(qid, "unmappable")
-            print(f"   ❌ Marked {qid} as unmappable")
+            print(f"   {_RED}❌ Marked {qid} as unmappable{_RESET}")
+
+        elif choice == "e":
+            store.update_status(qid, "escalated")
+            print(f"   {_YELLOW}⬆ Escalated {qid} for expert review{_RESET}")
 
         elif choice == "s":
             term = input("   Search term: ").strip()
             new_results = fuzzy.match(term)
-            api_results = api_client.search_loinc(term)
+            api_results = api_client.search_loinc(term) or []
             all_results = new_results + api_results
             if all_results:
-                print("\n   Search results:")
+                print(f"\n   {_BOLD}Search results:{_RESET}")
                 for i, r in enumerate(all_results, 1):
                     name = r.get("display_name", "")
                     code = r.get("loinc_code", "")
                     score = r.get("score", r.get("confidence", 0))
                     if isinstance(score, float) and score < 1.0:
                         score *= 100
-                    print(f"   {i}. {name} [{code}] — {score:.1f}%")
+                    colored = _color_confidence(score)
+                    print(f"   {i}. {name} [{code}] — {colored}")
                 sub = input("\n   Accept which # (or 'n' to skip): ").strip()
                 if sub.isdigit() and 1 <= int(sub) <= len(all_results):
                     hit = all_results[int(sub) - 1]
@@ -89,7 +128,7 @@ def review_pending(store: QuarantineStore | None = None,
                 else:
                     store.update_status(qid, "pending_review")
             else:
-                print("   No results found.")
+                print(f"   {_YELLOW}No results found.{_RESET}")
                 store.update_status(qid, "pending_review")
 
         elif choice == "m":
@@ -109,7 +148,7 @@ def review_pending(store: QuarantineStore | None = None,
                     raw_name=lab_name,
                 )
                 dictionary.save()
-                print(f"   ✅ Resolved {qid} → {code}")
+                print(f"   {_GREEN}✅ Resolved {qid} → {code}{_RESET}")
             else:
                 store.update_status(qid, "pending_review")
 
@@ -152,7 +191,7 @@ def _accept_match(store, dictionary, qid, lab_name, hit):
         raw_name=lab_name,
     )
     dictionary.save()
-    print(f"   ✅ Resolved {qid} → {code} ({display})")
+    print(f"   {_GREEN}✅ Resolved {qid} → {code} ({display}){_RESET}")
 
 
 def main():

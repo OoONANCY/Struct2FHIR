@@ -1,4 +1,10 @@
-"""Build LOINC Corpus — converts official Loinc.csv into loinc_corpus.json."""
+"""Build LOINC Corpus — converts official Loinc.csv into loinc_corpus.json.
+
+Generates multiple search terms per LOINC entry for improved fuzzy matching:
+  - LONG_COMMON_NAME (primary)
+  - COMPONENT (short chemical/analyte name)
+  - SHORTNAME (abbreviated form)
+"""
 
 import argparse
 import csv
@@ -19,14 +25,14 @@ LAB_CLASSES = {
 
 
 def build_corpus(input_path: str, output_path: str | None = None) -> int:
-    """Parse Loinc.csv and extract lab-relevant terms.
+    """Parse Loinc.csv and extract lab-relevant terms with multiple search names.
 
     Args:
         input_path:  Path to official Loinc.csv.
         output_path: Output path (default: loinc/data/loinc_corpus.json).
 
     Returns:
-        Number of terms extracted.
+        Number of unique LOINC entries extracted.
     """
     out = Path(output_path) if output_path else OUTPUT_PATH
     in_path = Path(input_path)
@@ -44,6 +50,8 @@ def build_corpus(input_path: str, output_path: str | None = None) -> int:
         for row in reader:
             loinc_code = row.get("LOINC_NUM", "").strip()
             long_name = row.get("LONG_COMMON_NAME", "").strip()
+            component = row.get("COMPONENT", "").strip()
+            short_name = row.get("SHORTNAME", "").strip()
             class_type = row.get("CLASS", "").strip()
             status = row.get("STATUS", "").strip()
 
@@ -58,9 +66,18 @@ def build_corpus(input_path: str, output_path: str | None = None) -> int:
                 continue
 
             seen.add(loinc_code)
+
+            # Build list of unique search terms for this code
+            search_terms = [long_name]
+            if component and component.lower() != long_name.lower():
+                search_terms.append(component)
+            if short_name and short_name.lower() not in {t.lower() for t in search_terms}:
+                search_terms.append(short_name)
+
             corpus.append({
                 "loinc_code": loinc_code,
                 "display_name": long_name,
+                "search_terms": search_terms,
             })
 
     # Sort by display name for consistency
@@ -70,7 +87,8 @@ def build_corpus(input_path: str, output_path: str | None = None) -> int:
     with open(out, "w", encoding="utf-8") as f:
         json.dump(corpus, f, indent=2, ensure_ascii=False)
 
-    print(f"✅ Built corpus with {len(corpus)} lab terms → {out}")
+    total_terms = sum(len(e["search_terms"]) for e in corpus)
+    print(f"✅ Built corpus with {len(corpus)} lab entries ({total_terms} search terms) → {out}")
     return len(corpus)
 
 

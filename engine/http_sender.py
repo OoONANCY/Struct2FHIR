@@ -20,6 +20,7 @@ def create_session(max_retries: int = DEFAULT_MAX_RETRIES,
     """Create a requests session with retry logic.
 
     Retries on 429, 500, 502, 503, 504 with exponential backoff.
+    Does NOT retry on 4xx client errors (resource is wrong).
     """
     session = requests.Session()
     retry = Retry(
@@ -46,8 +47,7 @@ def send_observation(observation: dict, config: dict, *,
         session:     Optional pre-built session (reuse for batch).
 
     Returns:
-        dict with 'success' (bool), 'status_code' (int or None),
-        'response' (str), and 'resource_id'.
+        dict with 'success', 'status_code', 'response', 'resource_id', 'error_type'.
     """
     resource_id = observation.get("id", "unknown")
     base_url = config["fhir_server_url"].rstrip("/")
@@ -61,6 +61,7 @@ def send_observation(observation: dict, config: dict, *,
             "status_code": None,
             "response": "dry_run",
             "resource_id": resource_id,
+            "error_type": None,
         }
 
     headers = {"Content-Type": "application/fhir+json"}
@@ -81,10 +82,13 @@ def send_observation(observation: dict, config: dict, *,
                 "status_code": resp.status_code,
                 "response": resp.text[:500],
                 "resource_id": resource_id,
+                "error_type": None,
             }
-        else:
+
+        # Differentiate 4xx (client error) from 5xx (server error)
+        if 400 <= resp.status_code < 500:
             logger.error(
-                "Failed to send Observation %s — HTTP %d: %s",
+                "Client error for Observation %s — HTTP %d (not retried): %s",
                 resource_id, resp.status_code, resp.text[:300],
             )
             return {
@@ -92,6 +96,20 @@ def send_observation(observation: dict, config: dict, *,
                 "status_code": resp.status_code,
                 "response": resp.text[:500],
                 "resource_id": resource_id,
+                "error_type": "client_error",
+            }
+        else:
+            # 5xx are handled by urllib3 retry — this path means retries exhausted
+            logger.error(
+                "Server error for Observation %s — HTTP %d (retries exhausted): %s",
+                resource_id, resp.status_code, resp.text[:300],
+            )
+            return {
+                "success": False,
+                "status_code": resp.status_code,
+                "response": resp.text[:500],
+                "resource_id": resource_id,
+                "error_type": "server_error",
             }
 
     except requests.RequestException as exc:
@@ -101,4 +119,5 @@ def send_observation(observation: dict, config: dict, *,
             "status_code": None,
             "response": str(exc),
             "resource_id": resource_id,
+            "error_type": "network_error",
         }

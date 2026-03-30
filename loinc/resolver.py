@@ -65,7 +65,11 @@ class LoincResolver:
         """
         clean_name = lab_name.strip()
         if not clean_name:
-            return ResolveResult(quarantined=True)
+            return ResolveResult(
+                quarantined=True,
+                source="quarantine",
+                candidates=[],
+            )
 
         # --- Tier 1: Cache ---
         cached = self.dictionary.lookup(clean_name)
@@ -115,6 +119,17 @@ class LoincResolver:
 
         # --- Tier 3: NLM API ---
         api_results = api_client.search_loinc(clean_name)
+
+        # Handle API unreachable (empty result with no candidates)
+        if api_results is None:
+            reason = f"api_unreachable: NLM API call failed for '{clean_name}'"
+            logger.info("Quarantined '%s' — %s", clean_name, reason)
+            return ResolveResult(
+                quarantined=True,
+                source="quarantine",
+                candidates=fuzzy_results,
+            )
+
         if api_results:
             best_api = api_results[0]
             if best_api["confidence"] >= API_ACCEPT_THRESHOLD:
@@ -139,10 +154,31 @@ class LoincResolver:
                     resolved=True,
                     candidates=fuzzy_results,
                 )
+            else:
+                # API returned results but below threshold
+                reason = (
+                    f"api_confidence_below_threshold "
+                    f"(best={best_api['confidence']:.2f}, "
+                    f"threshold={API_ACCEPT_THRESHOLD})"
+                )
+                logger.info("Quarantined '%s' — %s", clean_name, reason)
+                return ResolveResult(
+                    quarantined=True,
+                    source="quarantine",
+                    candidates=fuzzy_results + api_results,
+                )
 
-        # --- Tier 4: Quarantine ---
-        logger.info("Quarantined '%s' — no confident match found", clean_name)
+        # --- Tier 4: Quarantine — no candidates at all ---
+        no_fuzzy = not fuzzy_results
+        reason_parts = []
+        if no_fuzzy:
+            reason_parts.append("no_fuzzy_candidates")
+        reason_parts.append("no_api_results")
+        reason = "; ".join(reason_parts)
+
+        logger.info("Quarantined '%s' — %s", clean_name, reason)
         return ResolveResult(
             quarantined=True,
-            candidates=fuzzy_results + (api_results if api_results else []),
+            source="quarantine",
+            candidates=fuzzy_results,
         )

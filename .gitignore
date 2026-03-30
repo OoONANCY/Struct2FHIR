@@ -32,3 +32,10 @@ quarantine/data/quarantine.json
 
 # Test / audit artifacts
 audit_*.json
+.pytest_cache/
+
+# Run history (generated at runtime)
+runs/
+
+# Raw LOINC downloads (928MB+ — users download from loinc.org)
+Loinc_*/

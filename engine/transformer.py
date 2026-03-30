@@ -1,6 +1,7 @@
 """Transformer — cleans values, normalizes dates/units, applies custom rules."""
 
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger(__name__)
@@ -26,7 +27,10 @@ def transform_row(row: dict, config: dict) -> dict:
     row = dict(row)  # shallow copy
     rules = config.get("transform_rules", {})
 
-    # 1. Apply custom find/replace rules
+    # 0. Validate required fields
+    _validate_required_fields(row)
+
+    # 1. Apply custom find/replace rules (BEFORE any cleaning)
     for rule in rules.get("custom_rules", []):
         field = rule["field"]
         if field in row and row[field]:
@@ -36,7 +40,6 @@ def transform_row(row: dict, config: dict) -> dict:
     unit_map = rules.get("unit_map", {})
     if "unit" in row and row["unit"]:
         raw = row["unit"]
-        # Case-insensitive lookup
         for src, target in unit_map.items():
             if raw.upper() == src.upper():
                 row["unit"] = target
@@ -49,12 +52,26 @@ def transform_row(row: dict, config: dict) -> dict:
     if "value" in row and row["value"]:
         row["value"] = _normalize_value(row["value"])
 
-    # 5. Strip whitespace from all string fields
+    # 5. Anomaly detection against reference range
+    _check_value_anomaly(row)
+
+    # 6. Strip whitespace from all string fields
     for k, v in row.items():
         if isinstance(v, str):
             row[k] = v.strip()
 
     return row
+
+
+def _validate_required_fields(row: dict) -> None:
+    """Raise TransformError if critical fields are blank."""
+    patient_id = row.get("patient_id", "").strip()
+    if not patient_id:
+        raise TransformError("Missing required field: patient_id is blank")
+
+    lab_name = row.get("lab_name", "").strip()
+    if not lab_name:
+        raise TransformError("Missing required field: lab_name is blank")
 
 
 def _resolve_datetime(row: dict, config: dict) -> str:
@@ -100,14 +117,53 @@ def _resolve_datetime(row: dict, config: dict) -> str:
 def _normalize_value(raw: str) -> str:
     """Normalize a lab result value.
 
-    Strips trailing zeros from numeric values while keeping them parseable.
-    Non-numeric values are returned as-is.
+    Non-numeric values (e.g., '<0.5', '>100', 'POSITIVE') are returned as-is.
     """
     try:
         num = float(raw)
-        # Preserve integers as integers
         if num == int(num):
             return str(int(num))
         return str(num)
     except (ValueError, TypeError):
         return raw
+
+
+_RANGE_RE = re.compile(r"([\d.]+)\s*[-–]\s*([\d.]+)")
+
+
+def _check_value_anomaly(row: dict) -> None:
+    """Warn if a numeric value falls far outside the reference range."""
+    value_str = row.get("value", "")
+    ref_range = row.get("reference_range", "")
+    if not value_str or not ref_range:
+        return
+
+    try:
+        value = float(value_str)
+    except (ValueError, TypeError):
+        return
+
+    match = _RANGE_RE.search(ref_range)
+    if not match:
+        return
+
+    try:
+        low = float(match.group(1))
+        high = float(match.group(2))
+    except (ValueError, TypeError):
+        return
+
+    # Flag values that are >10× outside the reference range
+    range_span = high - low
+    if range_span <= 0:
+        return
+
+    if value < (low - 10 * range_span) or value > (high + 10 * range_span):
+        row["_anomaly_warning"] = (
+            f"Value {value} is extremely far outside reference range {ref_range}"
+        )
+        logger.warning(
+            "ANOMALY: lab_name='%s' value=%s reference_range='%s' — "
+            "value is >10× outside expected range",
+            row.get("lab_name", ""), value, ref_range,
+        )

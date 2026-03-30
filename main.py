@@ -5,6 +5,8 @@ import json
 import logging
 import sys
 import time
+from pathlib import Path
+from datetime import datetime, timezone
 
 from config.schema import load_config
 from engine.csv_reader import read_csv
@@ -16,6 +18,8 @@ from loinc.resolver import LoincResolver
 from quarantine.store import QuarantineStore
 
 logger = logging.getLogger(__name__)
+
+HISTORY_PATH = Path(__file__).parent / "runs" / "history.jsonl"
 
 
 def run_pipeline(config_path: str, input_path: str, *,
@@ -43,6 +47,11 @@ def run_pipeline(config_path: str, input_path: str, *,
         "transform_errors": 0,
         "validation_errors": 0,
         "send_errors": 0,
+        "resolution_sources": {
+            "cache": 0,
+            "fuzzy": 0,
+            "api": 0,
+        },
     }
 
     start_time = time.time()
@@ -71,9 +80,15 @@ def run_pipeline(config_path: str, input_path: str, *,
         result = resolver.resolve(lab_name)
 
         if result.quarantined:
-            quarantine.add(lab_name, transformed, candidates=result.candidates)
+            quarantine.add(lab_name, transformed,
+                           candidates=result.candidates,
+                           reason=_quarantine_reason(result, lab_name))
             stats["quarantined"] += 1
             continue
+
+        # Track resolution source
+        if result.source in stats["resolution_sources"]:
+            stats["resolution_sources"][result.source] += 1
 
         # 3. Assemble FHIR
         observation = assemble_observation(transformed, result.to_dict(), config)
@@ -101,13 +116,43 @@ def run_pipeline(config_path: str, input_path: str, *,
 
         # Progress logging
         if stats["total"] % 1000 == 0:
-            logger.info("Processed %d rows...", stats["total"])
+            elapsed = time.time() - start_time
+            rate = stats["total"] / elapsed if elapsed > 0 else 0
+            logger.info("Processed %d rows (%.1f rows/sec)...", stats["total"], rate)
 
     elapsed = time.time() - start_time
     stats["elapsed_seconds"] = round(elapsed, 2)
     stats["rows_per_second"] = round(stats["total"] / elapsed, 1) if elapsed > 0 else 0
 
+    # Persist run history
+    _save_run_history(stats, config_path, input_path, dry_run)
+
     return stats
+
+
+def _quarantine_reason(result, lab_name: str) -> str:
+    """Build a specific quarantine reason string."""
+    if not lab_name.strip():
+        return "empty_lab_name"
+    return "no_confident_match"
+
+
+def _save_run_history(stats: dict, config_path: str, input_path: str, dry_run: bool) -> None:
+    """Append run stats to a persistent JSONL file."""
+    HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
+    record = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "config": config_path,
+        "input": input_path,
+        "dry_run": dry_run,
+        **stats,
+    }
+    try:
+        with open(HISTORY_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, default=str) + "\n")
+        logger.info("Run history saved to %s", HISTORY_PATH)
+    except OSError as exc:
+        logger.warning("Could not save run history: %s", exc)
 
 
 def main():
@@ -139,6 +184,7 @@ def main():
         dry_run=args.dry_run, limit=args.limit,
     )
 
+    src = stats["resolution_sources"]
     print(f"\n{'=' * 50}")
     print(f"📊 Pipeline Summary")
     print(f"{'=' * 50}")
@@ -150,6 +196,7 @@ def main():
     print(f"   Send errors:       {stats['send_errors']}")
     print(f"   Elapsed:           {stats['elapsed_seconds']}s")
     print(f"   Throughput:        {stats['rows_per_second']} rows/sec")
+    print(f"   LOINC sources:     cache={src['cache']}  fuzzy={src['fuzzy']}  api={src['api']}")
     print(f"{'=' * 50}\n")
 
 
